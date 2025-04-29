@@ -13,8 +13,8 @@ DISPLAY_WIDTH = 200
 SIMULATOR_CAPTION = 'Ceng Parking Lot Simulator'
 
 # Parking lot configuration
-FLOORS = 10
-CARS_PER_FLOOR = 20
+FLOORS = 4
+CARS_PER_FLOOR = 10
 
 class Car:
     def __init__(self, car_id, car_color):
