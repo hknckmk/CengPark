@@ -740,7 +740,7 @@ class GameEngine:
                 simulator_fee = 0
                 subscribed = True
             else:
-                simulator_fee = self.__calculate_fee(time_passed)
+                simulator_fee = self.__calculate_fee(time_passed * 1000.0)
                 
             self.drawer.calculated_fee += fee
             self.drawer.simulator_fee += simulator_fee
@@ -782,13 +782,13 @@ class GameEngine:
                     car.subscribed = True
                     break
                 
-            del self.cars_waiting_to_subscribe[car.car_id]
-            self.subscribed_cars[car.car_id] = {
+            del self.cars_waiting_to_subscribe[car_id]
+            self.subscribed_cars[car_id] = {
                 "floor": floor,
                 "spot": spot
             }
 
-        self.subsriptions.add_subscription_raw(car.car_id, floor, spot)
+        self.subsriptions.add_subscription_raw(car_id, floor, spot)
         
         with self.lock:
             simulated_fee = self.__get_subscription_fee()
