@@ -9,9 +9,11 @@ import serial
 import sys
 import queue
 
-DEBUG = True
+DEBUG = False
+BOARD_SIMULATION = False
+
 def debug_print(message):
-    if DEBUG:
+    if DEBUG == True:
         print("DEBUG: " + message)
 
 # Screen dimensions
@@ -59,7 +61,7 @@ def checkMessage(message):
         return True
     elif message.startswith(b'SPC') and len(message) == 9:
         return True
-    elif message.startswith(b'FEE') and len(message) == 8:
+    elif message.startswith(b'FEE') and len(message) == 9:
         return True
     elif message.startswith(b'RES') and len(message) == 8:
         return True
@@ -269,8 +271,9 @@ class Drawer:
         self.drawer_thread.start()
 
     def stop(self):
-        self.running = False
-        self.drawer_thread.join()
+        if self.running:
+            self.running = False
+            self.drawer_thread.join()
 
     def __init_parking_spots(self):
         parking_spots = []
@@ -421,13 +424,13 @@ class SerialManager:
         self.data = b''
         self.time = 0
         self.avg_time = -1
-        self.max_time = -1
-        self.min_time = -1
+        self.max_time = float('-inf')
+        self.min_time = float('inf')
         self.prev_time = -1
         self.startTime = -1
         self.endTime = -1
         self.cmd_count = 0
-        self.commands = queue.Queue()
+        self.messages = queue.Queue()
         self.writer_lock = threading.Lock()
         self.statistics_lock = threading.Lock()
 
@@ -445,17 +448,20 @@ class SerialManager:
         if self.running:
             self.running = False
             self.receiver_thread.join()
-        self.serial.close()
+            self.serial.close()
 
     def __update_statistics(self):
         with self.statistics_lock:
             self.time = time.time()
             total_time_passed = (self.time - self.startTime) * 1000.0
-            self.cmd_count = self.cmd_count + 1
-            self.avg_time = (total_time_passed)/self.cmd_count
+            self.cmd_count += 1
+            if self.cmd_count > 0:
+                self.avg_time = (total_time_passed) / self.cmd_count
+            else:
+                self.avg_time = 0
 
             if self.prev_time != -1:
-                time_passed = (self.time-self.prev_time) * 1000.0
+                time_passed = (self.time - self.prev_time) * 1000.0
                 if time_passed < self.min_time or self.min_time == -1:
                     self.min_time = time_passed
                 if time_passed > self.max_time or self.max_time == -1:
@@ -476,17 +482,17 @@ class SerialManager:
                 if byte == b'$':
                     self.state = self.GETTING
                     if (self.data != b''):
-                        print("Error: Uncomplete command received.")
+                        print("Error: Uncomplete message received.")
                     self.data = b''
             elif self.state == self.GETTING:
                 if byte == b'#':
                     if (checkMessage(self.data)):
-                        self.commands.put(self.data)
+                        self.messages.put(self.data)
                         self.cmd_count += 1
                         self.data = b''
                         self.__update_statistics()
                     else:
-                        print("Error: Invalid command received.")
+                        print("Error: Invalid message received.")
                     self.data = b''
                     self.state = self.WAITING
                 else:
@@ -495,6 +501,116 @@ class SerialManager:
     def write(self, data):
         with self.writer_lock:
             self.serial.write(data)
+
+class BoardSimulator:
+    def __init__(self, debug_messages, debug_commands):
+        self.parking_lot = [[None for _ in range(10)] for _ in range(4)]
+        self.subscribed_cars = {}
+        self.subscribed_places = {}
+        self.car_queue = queue.Queue()
+        self.running = True
+        self.simulation_started = False
+        self.debug_messages = debug_messages
+        self.debug_commands = debug_commands
+        self.simulator_thread = threading.Thread(target=self.__simulate_board, daemon=True)
+        self.simulator_thread.start()
+
+    def __get__empty_spaces(self):
+        empty_spaces = 0
+        for floor in self.parking_lot:
+            for spot in floor:
+                if spot is None:
+                    empty_spaces += 1
+        return empty_spaces
+    
+    def stop(self):
+        self.running = False
+        self.simulator_thread.join()
+
+    def __process_park_message(self, car_id):
+        if car_id in self.subscribed_cars:
+            floor, spot = self.subscribed_cars[car_id]
+            if self.parking_lot[floor][spot] is not None:
+                self.car_queue.put(car_id)
+            else:
+                current_time = time.time()
+                self.parking_lot[floor][spot] = (car_id, current_time)
+                self.debug_messages.put(b'SPC' + f"{car_id:03}".encode('ascii') 
+                                        + chr(floor + 65).encode('ascii') + f"{spot + 1:02}".encode('ascii'))
+        else:
+            car_found = False
+            for floor in range(4):
+                for spot in range(10):
+                    if self.parking_lot[floor][spot] is None and (floor, spot) not in self.subscribed_places:
+                        current_time = time.time()
+                        self.parking_lot[floor][spot] = (car_id, current_time)
+                        self.debug_messages.put(b'SPC' + f"{car_id:03}".encode('ascii') 
+                                                + chr(floor + 65).encode('ascii') + f"{spot + 1:02}".encode('ascii'))
+                        car_found = True
+                        break
+                else:
+                    continue
+                break
+            if not car_found:
+                self.car_queue.put(car_id)
+                self.debug_messages.put(b'EMP' + f"{self.__get__empty_spaces():02}".encode('ascii'))
+
+    def __simulate_board(self):
+        while self.running:
+            time.sleep(0.1)
+            if self.debug_commands.empty():
+                if self.simulation_started:
+                    if not self.car_queue.empty():
+                        car_id = self.car_queue.get()
+                        self.__process_park_message(car_id)
+                    else:
+                        self.debug_messages.put(b'EMP' + f"{self.__get__empty_spaces():02}".encode('ascii'))
+            else:
+                command = self.debug_commands.get()
+                if command.startswith(b'GO'):
+                    self.simulation_started = True
+                if self.simulation_started:
+                    if command.startswith(b'EXT'):
+                        car_id = int(command[3:6].decode('ascii'))
+                        if car_id in self.subscribed_cars:
+                            self.debug_messages.put(b'FEE' + f"{car_id:03}".encode('ascii') + f"{000:03}".encode('ascii'))
+                            floor, spot = self.subscribed_cars[car_id]
+                            self.parking_lot[floor][spot] = None
+                        else:
+                            for floor in range(4):
+                                for spot in range(10):
+                                    if self.parking_lot[floor][spot] is not None:
+                                        if self.parking_lot[floor][spot][0] == car_id:
+                                            current_time = time.time()
+                                            parkedTime = self.parking_lot[floor][spot][1]
+                                            fee = int(4 * (current_time - parkedTime))
+                                            self.debug_messages.put(b'FEE' + f"{car_id:03}".encode('ascii') + f"{fee:03}".encode('ascii'))
+                                            self.parking_lot[floor][spot] = None
+                                            break
+                                else:
+                                    continue
+                                break
+                    elif command.startswith(b'PRK'):
+                        car_id = int(command[3:6].decode('ascii'))
+                        self.__process_park_message(car_id)
+                    elif command.startswith(b'SUB'):
+                        car_id = int(command[3:6].decode('ascii'))
+                        floor = ord(command[6:7].decode('ascii')) - ord('A')
+                        spot = int(command[7:9].decode('ascii')) - 1
+                        
+                        if (floor, spot) in self.subscribed_places:
+                            fee = 0
+                        elif car_id in self.subscribed_cars:
+                            fee = 0
+                        else:
+                            fee = 10
+                            self.subscribed_cars[car_id] = (floor, spot)
+                            self.subscribed_places[(floor, spot)] = car_id
+
+                        self.debug_messages.put(b'RES' + f"{car_id:03}".encode('ascii') + f"{fee:02}".encode('ascii'))
+                    elif command.startswith(b'END'):
+                        self.simulation_started = False
+                        self.running = False
 
 class GameEngine:
     def __init__(self, screen_width, screen_height, display_width, simulator_caption, floors, cars_per_floor
@@ -527,32 +643,40 @@ class GameEngine:
                              simulator_caption, self.car_queue, self.parking_lot, self.subsriptions, self.serial_manager)
         self.drawer.game_status = 0
         self.automatic_mode = True
+        if BOARD_SIMULATION == True:
+            self.debug_messages = queue.Queue()
+            self.debug_commands = queue.Queue()
+            self.board_simulator = BoardSimulator(self.debug_messages, self.debug_commands)
 
     def __stop(self):
         if self.generate:
             self.generate = False
             self.event_generator_thread.join()
+        if BOARD_SIMULATION == True:
+            self.board_simulator.stop()
         self.drawer.stop()
         self.serial_manager.stop()
         pygame.quit()
         sys.exit()
 
-    def __send_command(self, command, XXX: int = -1, Y: str = '?', ZZ: int = -1):
-        if command == "GO":
-            self.serial_manager.write(b'$GO#')
-        elif command == "END":
-            self.serial_manager.write(b'$END#')
-        elif command == "EXT":
+    def __send_command(self, code, XXX: int = -1, Y: str = '?', ZZ: int = -1):
+        command = b''
+        if code == "GO":
+            command = b'GO'
+        elif code == "END":
+            command = b'END'
+        elif code == "EXT":
             if (XXX < 0 or XXX > 999):
                 debug_print("Error: Invalid XXX for EXT command.")
                 return
+            command = b'EXT' + f"{XXX:03}".encode('ascii')
             self.serial_manager.write(b'$EXT' + f"{XXX:03}".encode('ascii') + b'#')
-        elif command == "PRK":
+        elif code == "PRK":
             if (XXX < 0 or XXX > 999):
                 debug_print("Error: Invalid XXX for PRK command.")
                 return
-            self.serial_manager.write(b'$PRK' + f"{XXX:03}".encode('ascii') + b'#')
-        elif command == "SUB":
+            command = b'PRK' + f"{XXX:03}".encode('ascii')
+        elif code == "SUB":
             if (XXX < 0 or XXX > 999):
                 debug_print("Error: Invalid XXX for SUB command.")
                 return
@@ -562,8 +686,15 @@ class GameEngine:
             if (ZZ < 0 or ZZ > 10):
                 debug_print("Error: Invalid ZZ for SUB command.")
                 return
-            self.serial_manager.write(b'$SUB' + f"{XXX:03}".encode('ascii') +
-                                       Y.encode('ascii') + f"{ZZ:02}".encode('ascii') + b'#')
+            command = b'SUB' + f"{XXX:03}".encode('ascii') + Y.encode('ascii') + f"{ZZ:02}".encode('ascii')
+        else:
+            debug_print("Error: Invalid command.")
+            return
+        
+        if BOARD_SIMULATION == True:
+            self.debug_commands.put(command)
+        else:
+            self.serial_manager.write(b'$' + command + b'#')
 
     def __add_car(self, car):
         with self.lock:
@@ -654,9 +785,11 @@ class GameEngine:
         if len(self.subscribed_cars) == 0:
             debug_print("There is no subscribed car.")
             return False
+        
         if len(self.nonparking_subscribed_cars) == 0:
             debug_print("There is no non-parking subscribed car.")
             return False
+        
         with self.lock:
             random_car = random.choice(self.nonparking_subscribed_cars)
         self.__add_car(random_car)
@@ -695,8 +828,6 @@ class GameEngine:
         
         self.car_queue.remove_car(car_in_queue)
         self.parking_lot.park_car_raw(floor, spot, car_in_queue)
-        with self.lock:
-            self.no_cars_in_game -= 1
 
     def __calculate_fee(self, time_passed):
         return int(time_passed / 250) + 1
@@ -735,10 +866,12 @@ class GameEngine:
            
             self.cars_waiting_to_exit.remove(exiting_car)
             self.nonparking_cars.append(car)
+            self.no_cars_in_game -= 1
             if subscribed:
                 self.nonparking_subscribed_cars.append(car)
             
     def __handle_res_message(self, car_id, fee):
+        already_subscribed = False
         with self.lock:
             subcribing_car = None
             for car in self.nonparking_cars:
@@ -757,64 +890,89 @@ class GameEngine:
             spot = self.cars_waiting_to_subscribe[car.car_id]["spot"]
             
             if car.car_id in self.subscribed_cars:
-                print(f"Error: Car{car.car_id} is already subscribed.")
-                return False
+                if fee == 0:
+                    already_subscribed = True
+                else:
+                    print(f"Error: Car{car.car_id} is already subscribed.")
+                    return False
 
         if self.subsriptions.get_subscription_raw(floor, spot) is not None:
-            print(f"Error: Spot {spot} on floor {floor} is already subscribed.")
-            return False
+            if fee == 0:
+                already_subscribed = True
+            else:
+                print(f"Error: Spot {spot} on floor {floor} is already subscribed.")
+                return False
         
         with self.lock:
-            for car in self.nonparking_subscribed_cars:
-                if car.car_id == car_id:
-                    car.subscribed = True
-                    break
-                
+            if not already_subscribed:
+                for car in self.nonparking_subscribed_cars:
+                    if car.car_id == car_id:
+                        car.subscribed = True
+                        break
+            else :
+                if subcribing_car in self.nonparking_subscribed_cars:
+                    self.nonparking_subscribed_cars.remove(subcribing_car)
+            
             del self.cars_waiting_to_subscribe[car_id]
+
+        if not already_subscribed:
             self.subscribed_cars[car_id] = {
                 "floor": floor,
                 "spot": spot
             }
+            self.subsriptions.add_subscription_raw(car_id, floor, spot)
+            
+            with self.lock:
+                simulated_fee = self.__get_subscription_fee()
+                self.drawer.calculated_fee += fee
+                self.drawer.simulator_fee += simulated_fee
+        
+    def __process_message(self, message):
+        if message.startswith(b'EMP'):
+            empty_spaces = int(message[3:5].decode('ascii'))
+            if empty_spaces < 0 or empty_spaces > 40:
+                print(f"Error: Invalid number of empty spaces {empty_spaces}.")
+                return
+            self.__handle_empty_space_message(empty_spaces)
 
-        self.subsriptions.add_subscription_raw(car_id, floor, spot)
-        
-        with self.lock:
-            simulated_fee = self.__get_subscription_fee()
-            self.drawer.calculated_fee += fee
-            self.drawer.simulator_fee += simulated_fee
-        
+        elif message.startswith(b'SPC'):
+            car_id = int(message[3:6].decode('ascii'))
+            floor = message[6:7].decode('ascii')
+            spot = int(message[7:9].decode('ascii'))
+            if floor not in ['A', 'B', 'C', 'D']:
+                print(f"Error: Invalid floor {floor} in SPC command.")
+                return
+            if spot < 1 or spot > 10:
+                print(f"Error: Invalid spot {spot} in SPC command.")
+                return
+            self.__handle_parking_space_message(car_id, floor, spot)
+
+        elif message.startswith(b'FEE'):
+            car_id = int(message[3:6].decode('ascii'))
+            fee = int(message[6:9].decode('ascii'))
+            self.__handle_fee_message(car_id, fee)
+
+        elif message.startswith(b'RES'):
+            car_id = int(message[3:6].decode('ascii'))
+            fee = int(message[6:8].decode('ascii'))
+            self.__handle_res_message(car_id, fee)
+
+        else:
+            print("Unknown message received.")
 
     def __receive_messages(self):
-        while self.serial_manager.running:
-            if not self.serial_manager.commands.empty():
-                command = self.serial_manager.commands.get()
-                if command.startswith(b'EMP'):
-                    empty_spaces = int(command[3:5].decode('ascii'))
-                    if empty_spaces < 0 or empty_spaces > 40:
-                        print(f"Error: Invalid number of empty spaces {empty_spaces}.")
-                        return
-                    self.__handle_empty_space_message(empty_spaces)
-                elif command.startswith(b'SPC'):
-                    car_id = int(command[3:6].decode('ascii'))
-                    floor = command[6:7].decode('ascii')
-                    spot = int(command[7:9].decode('ascii'))
-                    if floor not in ['A', 'B', 'C', 'D']:
-                        print(f"Error: Invalid floor {floor} in SPC command.")
-                        return
-                    if spot < 1 or spot > 10:
-                        print(f"Error: Invalid spot {spot} in SPC command.")
-                        return
-                    self.__handle_parking_space_message(car_id, floor, spot)
-                elif command.startswith(b'FEE'):
-                    car_id = int(command[3:6].decode('ascii'))
-                    fee = int(command[6:9].decode('ascii'))
-                    self.__handle_fee_message(car_id, fee)
-                elif command.startswith(b'RES'):
-                    car_id = int(command[3:6].decode('ascii'))
-                    fee = int(command[6:8].decode('ascii'))
-                    self.__handle_res_message(car_id, fee)
-                else:
-                    print("Unknown command received.")
+        while self.serial_manager.running and self.running:
+            if not self.serial_manager.messages.empty():
+                message = self.serial_manager.messages.get()
+                self.__process_message(message)
+            else:
+                break
+
+    def __debug_receive_messages(self):
+        while self.running:
+            if not self.debug_messages.empty():
+                message = self.debug_messages.get()
+                self.__process_message(message)
             else:
                 break
 
@@ -823,8 +981,9 @@ class GameEngine:
             random_number = random.randint(0, 1000)
             with self.lock:
                 no_cars = self.no_cars_in_game
+                coefficient = int(200 * no_cars / 35)
 
-            if random_number < 600 and no_cars < 45:
+            if random_number < 600 - coefficient and no_cars < 45:
                 # Randomly add a car
                 self.__add_random_car()
             elif random_number < 800 and self.parking_lot.get_total_cars() > 0:
@@ -840,7 +999,7 @@ class GameEngine:
                 # DO NOTHING
                 pass
 
-            time.sleep(0.11)
+            time.sleep(0.11)             
 
     def run(self):
         # Waiting loop
@@ -890,7 +1049,10 @@ class GameEngine:
                         elif event.key == pygame.K_u:
                             self.__add_random_subscribed_car()                    
 
-            self.__receive_messages()            
+            if BOARD_SIMULATION == True: 
+                self.__debug_receive_messages()
+            else:
+                self.__receive_messages()            
 
             current_time = time.time()
             
@@ -900,6 +1062,8 @@ class GameEngine:
 
         self.status = 2
         self.drawer.game_status = 2
+        self.generate = False
+        self.serial_manager.stop()
 
         # Loop to wait for the user to close the window
         while True:
