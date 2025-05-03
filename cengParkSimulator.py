@@ -526,6 +526,7 @@ class GameEngine:
         self.drawer = Drawer(screen_width, screen_height, display_width, floors, cars_per_floor, 
                              simulator_caption, self.car_queue, self.parking_lot, self.subsriptions, self.serial_manager)
         self.drawer.game_status = 0
+        self.automatic_mode = True
 
     def __stop(self):
         if self.generate:
@@ -637,21 +638,8 @@ class GameEngine:
                 "spot": spot
             }
 
-        #     floor = ord(letter) - ord('A')
-        #     ind = spot - 1
-        #     if self.subsriptions.get_subscription(floor, ind) is not None:
-        #         debug_print(f"Error: Spot {spot} on floor {letter} is already occupied.")
-        #         return False
-            
-        #     self.subscribed_cars[car.car_id] = {
-        #         "floor": letter,
-        #         "spot": spot
-        #     }
+            self.nonparking_subscribed_cars.append(car)
 
-        #     self.nonparking_subscribed_cars.append(car)
-        
-        # self.subsriptions.add_subscription(car.car_id, floor, ind)
-        # car.subscribed = True
         self.__send_command("SUB", car.car_id, letter, spot)  
         return True
     
@@ -855,7 +843,7 @@ class GameEngine:
             time.sleep(0.11)
 
     def run(self):
-        # Main loop
+        # Waiting loop
         while True:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -863,22 +851,28 @@ class GameEngine:
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         self.__stop()
-                    if event.key == pygame.K_SPACE:
+                    elif event.key == pygame.K_a:
+                        self.automatic_mode =True
+                        break
+                    elif event.key == pygame.K_m:
+                        self.automatic_mode = False
                         break
             else:
                 continue
             break
 
-        
+        # Start the game
         self.serial_manager.start()
         self.running = True
         start_time = time.time()
         self.__send_command("GO")
         self.status = 1
         self.drawer.game_status = 1
-        self.generate = True
-        self.event_generator_thread.start()
+        if self.automatic_mode:
+            self.generate = True
+            self.event_generator_thread.start()
 
+        # Main running loop
         while self.running:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -886,14 +880,15 @@ class GameEngine:
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         self.__stop()
-                    # if event.key == pygame.K_r:
-                    #     self.__add_random_car()
-                    # if event.key == pygame.K_t:
-                    #     self.__exit_random_car()
-                    # if event.key == pygame.K_y:
-                    #     self.__subscribe_random_car()
-                    # if event.key == pygame.K_u:
-                    #     self.__add_random_subscribed_car()                    
+                    if not self.automatic_mode:
+                        if event.key == pygame.K_r:
+                            self.__add_random_car()
+                        elif event.key == pygame.K_t:
+                            self.__exit_random_car()
+                        elif event.key == pygame.K_y:
+                            self.__subscribe_random_car()
+                        elif event.key == pygame.K_u:
+                            self.__add_random_subscribed_car()                    
 
             self.__receive_messages()            
 
@@ -906,6 +901,7 @@ class GameEngine:
         self.status = 2
         self.drawer.game_status = 2
 
+        # Loop to wait for the user to close the window
         while True:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
