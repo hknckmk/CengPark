@@ -454,7 +454,6 @@ class SerialManager:
         with self.statistics_lock:
             self.time = time.time()
             total_time_passed = (self.time - self.startTime) * 1000.0
-            self.cmd_count += 1
             if self.cmd_count > 0:
                 self.avg_time = (total_time_passed) / self.cmd_count
             else:
@@ -603,7 +602,7 @@ class BoardSimulator:
                         elif car_id in self.subscribed_cars:
                             fee = 0
                         else:
-                            fee = 10
+                            fee = 50
                             self.subscribed_cars[car_id] = (floor, spot)
                             self.subscribed_places[(floor, spot)] = car_id
 
@@ -833,7 +832,7 @@ class GameEngine:
         return int(time_passed / 250) + 1
     
     def __get_subscription_fee(self):
-        return 10
+        return 50
     
     def __handle_fee_message(self, car_id, fee):
         exiting_car = None
@@ -879,21 +878,21 @@ class GameEngine:
                     subcribing_car = car
                     break
             if subcribing_car is None:
-                print(f"Error: Car{car.car_id} is not in the non-parking list.")
+                print(f"Error: Car{car_id} is not in the non-parking list.")
                 return
 
-            if car.car_id not in self.cars_waiting_to_subscribe:
+            if car_id not in self.cars_waiting_to_subscribe:
                 print(f"Error: Car{car_id} is not in the waiting subcriber list.")
                 return False
 
-            floor = self.cars_waiting_to_subscribe[car.car_id]["floor"]
-            spot = self.cars_waiting_to_subscribe[car.car_id]["spot"]
+            floor = self.cars_waiting_to_subscribe[car_id]["floor"]
+            spot = self.cars_waiting_to_subscribe[car_id]["spot"]
             
-            if car.car_id in self.subscribed_cars:
+            if car_id in self.subscribed_cars:
                 if fee == 0:
                     already_subscribed = True
                 else:
-                    print(f"Error: Car{car.car_id} is already subscribed.")
+                    print(f"Error: Car{car_id} is already subscribed.")
                     return False
 
         if self.subsriptions.get_subscription_raw(floor, spot) is not None:
@@ -909,7 +908,7 @@ class GameEngine:
                     if car.car_id == car_id:
                         car.subscribed = True
                         break
-            else :
+            else:
                 if subcribing_car in self.nonparking_subscribed_cars:
                     self.nonparking_subscribed_cars.remove(subcribing_car)
             
