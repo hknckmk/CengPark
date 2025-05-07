@@ -416,7 +416,8 @@ class SerialManager:
 
     def __init__(self, port, baudrate, parity, rtscts, xonxoff):
         try:
-            self.serial = serial.Serial(port, baudrate, parity=parity,
+            if BOARD_SIMULATION == False:
+                self.serial = serial.Serial(port, baudrate, parity=parity,
                                     rtscts=rtscts, xonxoff=xonxoff, timeout=None)
         except serial.SerialException as e:
             raise
@@ -433,16 +434,18 @@ class SerialManager:
         self.messages = queue.Queue()
         self.writer_lock = threading.Lock()
         self.statistics_lock = threading.Lock()
-
         self.running = False
-        self.receiver_thread = threading.Thread(target=self.read, daemon=True)
+
+        if BOARD_SIMULATION == False:
+            self.receiver_thread = threading.Thread(target=self.read, daemon=True)
 
     def start(self):
-        self.running = True
         self.startTime = time.time()
         self.cmd_count = 0
         self.state = self.WAITING
-        self.receiver_thread.start()
+        if BOARD_SIMULATION == False:
+            self.running = True
+            self.receiver_thread.start()
 
     def stop(self):
         if self.running:
@@ -499,7 +502,8 @@ class SerialManager:
 
     def write(self, data):
         with self.writer_lock:
-            self.serial.write(data)
+            if BOARD_SIMULATION == False:
+                self.serial.write(data)
 
 class BoardSimulator:
     def __init__(self, debug_messages, debug_commands):
