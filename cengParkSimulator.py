@@ -605,6 +605,8 @@ class BoardSimulator:
                             fee = 0
                         elif car_id in self.subscribed_cars:
                             fee = 0
+                        elif self.parking_lot[floor][spot] is not None:
+                            fee = 0
                         else:
                             fee = 50
                             self.subscribed_cars[car_id] = (floor, spot)
@@ -891,6 +893,13 @@ class GameEngine:
 
             floor = self.cars_waiting_to_subscribe[car_id]["floor"]
             spot = self.cars_waiting_to_subscribe[car_id]["spot"]
+
+            if self.parking_lot.read_spot_raw(floor, spot) is not None:
+                if fee != 0:
+                    print(f"Error: Spot {spot} on floor {floor} is already occupied. Cannot subscribe.")
+                if subcribing_car in self.nonparking_subscribed_cars:
+                    self.nonparking_subscribed_cars.remove(subcribing_car)
+                    return False
             
             if car_id in self.subscribed_cars:
                 if fee == 0:
