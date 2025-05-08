@@ -10,7 +10,7 @@ import sys
 import queue
 
 DEBUG = False
-BOARD_SIMULATION = False
+BOARD_SIMULATION = True
 
 def debug_print(message):
     if DEBUG == True:
@@ -891,6 +891,12 @@ class GameEngine:
                 print(f"Error: Car{car_id} is not in the waiting subcriber list.")
                 return False
 
+            if fee != 0 and fee != 50:
+                print(f"Wrong fee {fee} for Car{car_id}.")
+                if subcribing_car in self.nonparking_subscribed_cars:
+                    self.nonparking_subscribed_cars.remove(subcribing_car)
+                    return False
+
             floor = self.cars_waiting_to_subscribe[car_id]["floor"]
             spot = self.cars_waiting_to_subscribe[car_id]["spot"]
 
@@ -917,10 +923,16 @@ class GameEngine:
         
         with self.lock:
             if not already_subscribed:
-                for car in self.nonparking_subscribed_cars:
-                    if car.car_id == car_id:
-                        car.subscribed = True
-                        break
+                if fee == 50:
+                    for car in self.nonparking_subscribed_cars:
+                        if car.car_id == car_id:
+                            car.subscribed = True
+                            break
+                elif fee == 0:
+                    print(f"Error: Car{car_id} could be subscribed but rejected.")
+                    if subcribing_car in self.nonparking_subscribed_cars:
+                        self.nonparking_subscribed_cars.remove(subcribing_car)
+                        return False
             else:
                 if subcribing_car in self.nonparking_subscribed_cars:
                     self.nonparking_subscribed_cars.remove(subcribing_car)
