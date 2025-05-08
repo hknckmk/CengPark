@@ -10,7 +10,7 @@ import sys
 import queue
 
 DEBUG = False
-BOARD_SIMULATION = True
+BOARD_SIMULATION = False
 
 def debug_print(message):
     if DEBUG == True:
